@@ -71,11 +71,58 @@ function savePageNow(atab, pageUrl, silent = false, options = {}, loggedInFlag =
 
   if (isValidUrl(pageUrl) && isNotExcludedUrl(pageUrl)) {
 
+    // ** BEGIN TEST **
+    // *** SPN Logged Out ***
+
     if (loggedInFlag === false) {
       // Use anonymous SPN GET method by opening a new tab and skipping status updates within extension.
-      openByWindowSetting('https://web.archive.org/save/' + pageUrl)
+      // openByWindowSetting('https://web.archive.org/save/' + pageUrl)
+
+      // Extract the job_id from the html returned.
+      const postBody = 'url=' + fixedEncodeURIComponent(pageUrl)
+      let headers = new Headers(hostHeaders)
+      headers.set('Content-Type', 'application/x-www-form-urlencoded')
+      headers.set('Accept', 'text/html,application/xhtml+xml,application/xml') // required
+      fetch('https://web.archive.org/save/' + pageUrl, {
+        method: 'POST',
+        body: postBody,
+        headers: headers
+      })
+      .then((response) => {
+        return response.text()
+      })
+      .then(async (html) => {
+        // parse the HTML text for the job id
+        // match the spn id pattern
+        const jobRegex =  /spn2\-[a-z0-9\-]*/g
+        const jobIds = html.match(jobRegex)
+        console.log('job id patterns: ', jobIds) // DEBUG
+
+        if (jobIds && (jobIds.length > 0)) {
+          // TODO: no way to check for errors?
+
+          // update UI
+          addToolbarState(atab, 'S')
+          chrome.runtime.sendMessage({ message: 'save_start', atab: atab, url: pageUrl }, checkLastError)
+
+          // TODO: notify & resource list
+
+          // call status after SPN response
+          await sleep(SPN_RETRY)
+          savePageStatus(atab, pageUrl, silent, jobIds[0]) // TODO: this results in error since not logged in
+        }
+      })
+      .catch((err) => {
+        // handle http errors
+        console.log(err)
+        chrome.runtime.sendMessage({ message: 'save_error', error: 'Save Error', url: pageUrl, atab: atab }, checkLastError)
+      })
+
       return
     }
+
+    // ** END TEST **
+    // *** SPN Logged In ***
 
     // setup api
     const postData = new URLSearchParams(options)
@@ -145,17 +192,26 @@ function savePageNow(atab, pageUrl, silent = false, options = {}, loggedInFlag =
  */
 function savePageStatus(atab, pageUrl, silent = false, jobId) {
 
+  console.log('savePageStatus for job: ' + jobId) // DEBUG
+
   // setup api
   const postData = new URLSearchParams({ 'job_id': jobId })
   const timeoutPromise = new Promise((resolve, reject) => {
     setTimeout(() => { reject(new Error('timeout')) }, API_TIMEOUT)
-    fetch(hostURL + 'save/status', {
-      credentials: 'include',
-      method: 'POST',
-      body: postData,
-      headers: hostHeaders
+    // ** BEGIN TEST **
+    let headers = new Headers(hostHeaders)
+    // headers.set('Content-Type', 'application/x-www-form-urlencoded')
+    // headers.set('Referer', 'https://web.archive.org/save/' + pageUrl) // won't work, can't change Referer!! REMOVE
+    // fetch(hostURL + 'save/status', { // prior POST
+    fetch('https://web.archive.org/save/status/' + jobId, { // TEST
+      // credentials: 'include',
+      method: 'GET', // 'POST',
+      // body: postData,
+      // referrerPolicy: 'no-referrer-when-downgrade', // TEST: didn't change anything
+      headers: headers
     })
     .then(resolve, reject)
+    // ** END TEST **
   })
 
   // call api
